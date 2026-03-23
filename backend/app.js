@@ -8,7 +8,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 const rawOrigins = process.env.CORS_ALLOWED_ORIGINS || "*";
-const origins = rawOrigins.split(",").map(o => o.trim()).filter(o => o);
+const origins = rawOrigins === "*" ? "*" : rawOrigins.split(",").map(o => o.trim()).filter(o => o);
 
 app.use(cors({
     origin: origins,
@@ -18,15 +18,22 @@ app.use(cors({
 
 app.use(express.json());
 
+// Optimized fetch graph data
 async function _fetchGraphData(limit = 500, targetIds = null) {
     const client = getDbConnection();
+    console.log(`Fetching graph data: limit=${limit}, targets=${targetIds?.length || 0}`);
 
     let edgesRs;
-    if (targetIds && targetIds.length > 0) {
-        const idsStr = targetIds.join("','");
-        edgesRs = await client.execute(`SELECT source, target, type FROM edges WHERE source IN ('${idsStr}') OR target IN ('${idsStr}') LIMIT 200`);
-    } else {
-        edgesRs = await client.execute(`SELECT source, target, type FROM edges LIMIT ${limit}`);
+    try {
+        if (targetIds && targetIds.length > 0) {
+            const idsStr = targetIds.join("','");
+            edgesRs = await client.execute(`SELECT source, target, type FROM edges WHERE source IN ('${idsStr}') OR target IN ('${idsStr}') LIMIT 200`);
+        } else {
+            edgesRs = await client.execute(`SELECT source, target, type FROM edges LIMIT ${limit}`);
+        }
+    } catch (dbErr) {
+        console.error("Database error fetching edges:", dbErr.message);
+        throw dbErr;
     }
 
     const edgesData = edgesRs.rows;
@@ -35,62 +42,54 @@ async function _fetchGraphData(limit = 500, targetIds = null) {
     const allIds = new Set();
 
     if (targetIds) {
-        targetIds.forEach(id => allIds.add(id));
+        targetIds.forEach(id => allIds.add(String(id)));
     }
 
     edgesData.forEach(row => {
-        allIds.add(row.source);
-        allIds.add(row.target);
+        allIds.add(String(row.source));
+        allIds.add(String(row.target));
     });
 
+    if (allIds.size === 0) return { nodes: [], edges: [] };
+
     const metaMap = {};
-    
-    // Get all tables except edges and sqlite_sequence
-    const tablesRs = await client.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('edges', 'sqlite_sequence')");
-    const availableTables = tablesRs.rows.map(r => r.name);
+    const idsArray = Array.from(allIds);
+    const idsStr = idsArray.join("','");
 
-    for (const table of availableTables) {
-        if (allIds.size === 0) break;
+    // Mapping of tables to their primary ID column
+    const entityTables = [
+        { name: 'business_partners', id: 'businessPartner', label: 'Business Partner' },
+        { name: 'products', id: 'product', label: 'Product' },
+        { name: 'plants', id: 'plant', label: 'Plant' },
+        { name: 'sales_headers', id: 'salesOrder', label: 'Sales Order' },
+        { name: 'delivery_headers', id: 'deliveryDocument', label: 'Delivery' },
+        { name: 'billing_headers', id: 'billingDocument', label: 'Invoice' },
+        { name: 'journal_entries', id: 'accountingDocument', label: 'Accounting' }
+    ];
 
-        // Better heuristic for ID col
-        let idCol = 'id'; // default
-        if (table === 'business_partners') idCol = 'businessPartner';
-        else if (table === 'billing_headers') idCol = 'billingDocument';
-        else if (table === 'delivery_headers') idCol = 'deliveryDocument';
-        else if (table === 'journal_entries') idCol = 'accountingDocument';
-        else if (table === 'products') idCol = 'product';
-        else if (table === 'payments') idCol = 'accountingDocument';
-        else {
-            // Check table info to find the first column as default ID
-            const infoRs = await client.execute(`PRAGMA table_info(${table})`);
-            if (infoRs.rows.length > 0) {
-                idCol = infoRs.rows[0].name;
-            }
-        }
-
-        const idsArray = Array.from(allIds);
-        const idsStr = idsArray.join("','");
-        
+    // Parallelize metadata fetching for speed
+    await Promise.all(entityTables.map(async (table) => {
         try {
-            const resultsRs = await client.execute(`SELECT * FROM ${table} WHERE ${idCol} IN ('${idsStr}')`);
+            const resultsRs = await client.execute(`SELECT * FROM ${table.name} WHERE ${table.id} IN ('${idsStr}')`);
             resultsRs.rows.forEach(res => {
-                const mid = String(res[idCol]);
-                const label = table.replace(/_/g, ' ').replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase()).replace(/s$/, '');
-                metaMap[mid] = { type: label, data: res };
+                const mid = String(res[table.id]);
+                metaMap[mid] = { type: table.label, data: res };
             });
         } catch (err) {
-            console.error(`Error fetching from table ${table}: ${err.message}`);
+            // Silently skip if table doesn't exist or query fails
+            console.debug(`Note: Could not fetch from ${table.name}: ${err.message}`);
         }
-    }
+    }));
 
     edgesData.forEach((row, idx) => {
         const { source: src, target: tgt, type: edgeType } = row;
         [src, tgt].forEach(nodeId => {
-            if (!nodesDict[nodeId]) {
-                const info = metaMap[nodeId] || { type: "Entity", data: {} };
-                nodesDict[nodeId] = {
-                    id: nodeId,
-                    label: nodeId,
+            const sId = String(nodeId);
+            if (!nodesDict[sId]) {
+                const info = metaMap[sId] || { type: "Entity", data: {} };
+                nodesDict[sId] = {
+                    id: sId,
+                    label: sId,
                     type: info.type,
                     metadata: info.data
                 };
@@ -98,8 +97,8 @@ async function _fetchGraphData(limit = 500, targetIds = null) {
         });
         edges.push({
             id: `e${idx}`,
-            source: src,
-            target: tgt,
+            source: String(src),
+            target: String(tgt),
             type: edgeType
         });
     });
@@ -112,6 +111,7 @@ app.get("/graph", async (req, res) => {
         const data = await _fetchGraphData(500);
         res.json(data);
     } catch (error) {
+        console.error("Error in /graph endpoint:", error);
         res.status(500).json({ error: error.message });
     }
 });
