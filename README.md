@@ -14,7 +14,37 @@ A powerful, AI-driven assistant for exploring and visualizing SAP Order-to-Cash 
 
 - **Backend**: Node.js (Express), Better-SQLite3, Google Gemini AI (3-Key Failover)
 - **Frontend**: React (Vite, Cytoscape.js, React-Markdown with GFM, Lucide-React)
-- **Data**: SAP O2C JSONL datasets
+- **Data**: SAP O2C JSONL datasets (Ingested into LibSQL/Turso)
+
+## 🏗️ Architecture Overview
+
+The SAP O2C Assistant is built with a modern, decoupled architecture designed for scalability and reliability:
+
+- **Backend (Node.js/Express)**: A lightweight API layer that manages data flow, AI orchestration, and security validation. It uses a custom-built failover mechanism for LLM interactions.
+- **Frontend (React/Vite)**: A responsive SPA that provides an interactive chat interface and a dynamic network graph for data visualization.
+- **Data Layer (LibSQL/Turso)**: A high-performance, edge-ready database that stores structured SAP data and pre-computed graph edges.
+- **AI Orchestration**: A two-pass generation pipeline that translates natural language to SQL and then summarizes the results back into human-readable insights.
+
+## 🗄️ Database Choice: LibSQL (Turso)
+
+We chose **LibSQL** (the open-source fork of SQLite) and **Turso** for several strategic reasons:
+
+- **Local-First Development**: Uses a local `database.sqlite` file for development, ensuring no latency and zero cost during the initial build.
+- **Production Scalability**: Seamlessly migrates to Turso Cloud for edge-distributed data access with minimal configuration changes.
+- **SQL Compatibility**: Allows the LLM to generate standard SQL queries, which are highly portable and well-understood by modern AI models.
+- **Performance**: Extremely fast read/write operations for the tabular datasets used in SAP O2C flows.
+
+## 🧠 LLM Prompting Strategy
+
+The system employs a sophisticated prompting strategy to ensure accuracy and minimize hallucinations:
+
+1.  **Context Injection (RAG-Lite)**: Every SQL generation prompt includes the full database schema and a detailed map of table relationships (e.g., SO -> Delivery -> Billing).
+2.  **Persona Engineering**: The model is instructed to act as an "Expert SAP O2C Data Analyst," grounding its responses in domain-specific logic.
+3.  **Strict Output Formatting**: The model is constrained to output *only* raw SQL in the first pass, preventing conversational filler from breaking the database execution.
+4.  **Two-Pass Validation**:
+    - **Pass 1 (NL to SQL)**: Translates the user's question into a specific `SELECT` query.
+    - **Pass 2 (Data to NL)**: Takes the raw JSON result from the database and converts it into a formatted Markdown table or a natural language explanation.
+5.  **Failover Resilience**: Uses a 3-key rotation system. If the primary Gemini key hits a rate limit or fails, the system automatically retries with a fallback key within seconds.
 
 ## 🚀 Getting Started
 
@@ -100,8 +130,11 @@ node scripts/audit.js
 - `scripts/`: Utility scripts.
   - `audit.js`: Node.js script for data auditing and integrity checks.
 
-## 🛡️ Security Guardrails
+## 🛡️ Security & Guardrails
 
-The system is restricted to answering questions related to:
-- Orders, deliveries, billing/invoices, payments, customers, and products.
-- Only `SELECT` queries are permitted; all other operations (DROP, DELETE, etc.) are strictly blocked.
+We have implemented multiple layers of protection to ensure system stability and data integrity:
+
+- **Intent Validation**: Before reaching the LLM, user queries are scanned for SAP-related keywords. Off-topic questions (e.g., "What's the weather?") are blocked at the entry point.
+- **SQL Keyword Filtering**: The system strictly enforces a **"Read-Only" policy**. Any generated SQL containing forbidden keywords (`DROP`, `DELETE`, `UPDATE`, `INSERT`, `ALTER`) is immediately rejected before execution.
+- **Execution Sandbox**: Only `SELECT` statements are permitted. The database connection itself can be configured with restricted permissions for added safety.
+- **Hallucination Prevention**: The system prompt explicitly forbids the LLM from using tables or columns not defined in the provided schema.
