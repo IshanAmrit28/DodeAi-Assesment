@@ -119,13 +119,18 @@ node scripts/audit.js
 
 ## 📂 Project Structure
 
-- `backend/`: Node.js Express server and AI logic.
-  - `src/services/ingest.js`: Dynamic schema generation and data loading.
-  - `src/services/chatService.js`: Gemini-powered SQL generation, failover logic, and Markdown formatting.
-  - `src/models/schemas.js`: Data models for API contracts.
-  - `app.js`: API entry point and Express application logic.
+- `backend/`: Node.js Express server, fully modularized.
+  - `app.js`: Clean API entry point, wiring routes and middlewares.
+  - `src/routes/`: Express route definitions (`chatRoutes.js`, `graphRoutes.js`).
+  - `src/controllers/`: Request/Response HTTP handlers.
+  - `src/services/`: Core orchestration (`chatService.js`, `graphService.js`, `ingest.js`).
+  - `src/llm/`: Isolated Gemini API client and custom 3-key failover logic.
+  - `src/query/`: Safe SQLite execution and payload formatting.
+  - `src/guardrails/`: Security, intent validation, and SQL read-only constraints.
+  - `src/middlewares/`: Centralized Express error mapping and robust request logging.
+  - `src/utils/`: Unified backend logger and decoupled prompt schemas.
 - `frontend/`: React components and styles.
-  - `src/components/GraphView.jsx`: Network visualization.
+  - `src/components/GraphView.jsx`: Network visualization using Cytoscape.js.
   - `src/components/ChatView.jsx`: AI chat with Markdown/GFM support.
 - `scripts/`: Utility scripts.
   - `audit.js`: Node.js script for data auditing and integrity checks.
