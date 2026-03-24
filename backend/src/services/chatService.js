@@ -1,8 +1,9 @@
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { getDbConnection } = require("../config/database");
-require("dotenv").config();
+const path = require("path");
+require("dotenv").config({ path: path.resolve(__dirname, "../../.env") });
 
-const MODEL_NAME = "gemini-1.5-flash-latest";
+const MODEL_NAME = "gemini-2.5-flash";
 
 const SYSTEM_PROMPT = `
 You are an expert SAP O2C (Order to Cash) data analyst. Your goal is to translate natural language questions into precise SQL queries.
@@ -57,12 +58,26 @@ async function callGeminiWithFailover(prompt, systemInstruction = null) {
         { name: "GEMINI_API_KEY_3", val: process.env.GEMINI_API_KEY_3 },
     ];
 
-    const attempts = [keys[0], keys[0], keys[1], keys[2]];
+    const availableKeys = keys.filter(k => k.val);
+    
+    if (availableKeys.length === 0) {
+        console.error("No Gemini API keys found in environment variables.");
+        throw new Error("API Configuration error: No Gemini AI keys found. Please check your .env file.");
+    }
+
+    // Prepare attempts: first key twice, then others
+    const attempts = [];
+    if (availableKeys[0]) {
+        attempts.push(availableKeys[0]);
+        attempts.push(availableKeys[0]);
+    }
+    if (availableKeys[1]) attempts.push(availableKeys[1]);
+    if (availableKeys[2]) attempts.push(availableKeys[2]);
+
     let fallbackUsed = false;
 
     for (let i = 0; i < attempts.length; i++) {
         const { name, val } = attempts[i];
-        if (!val) continue;
 
         try {
             const genAI = new GoogleGenerativeAI(val);
@@ -79,11 +94,12 @@ async function callGeminiWithFailover(prompt, systemInstruction = null) {
             return { text, keyName: name, fallbackUsed };
         } catch (error) {
             console.warn(`Key ${name} failed. Attempt ${i + 1}. Error: ${error.message}`);
-            if (i === 0) await new Promise(resolve => setTimeout(resolve, 1000));
+            // Only delay on first attempt of first key if there are more keys
+            if (i === 0 && attempts.length > 1) await new Promise(resolve => setTimeout(resolve, 1000));
         }
     }
 
-    throw new Error("System is under high load. Please try again later.");
+    throw new Error("All configured Gemini API keys failed or are rate limited. Please try again later.");
 }
 
 function validateQueryIntent(query) {
