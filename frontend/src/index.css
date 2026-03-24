@@ -95,13 +95,12 @@ body {
 /* Markdown Table Styling */
 .message-content table {
   width: 100%;
-  display: block;
-  overflow-x: auto;
   border-collapse: collapse;
   margin: 1rem 0;
   font-size: 0.8125rem;
   background: rgba(0, 0, 0, 0.2);
   border-radius: 0.5rem;
+  overflow: hidden;
 }
 
 .message-content th {

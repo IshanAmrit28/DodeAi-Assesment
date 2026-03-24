@@ -30,7 +30,16 @@ const ChatView = ({ onSendMessage, messages, isLoading }) => {
               </span>
             </div>
             <div className="message-content">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              <ReactMarkdown 
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  table: ({node, ...props}) => (
+                    <div style={{ overflowX: 'auto', width: '100%', borderRadius: '0.5rem' }}>
+                      <table {...props} />
+                    </div>
+                  )
+                }}
+              >
                 {msg.content}
               </ReactMarkdown>
             </div>
